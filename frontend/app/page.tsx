@@ -1,5 +1,6 @@
 'use client';
 
+import type { FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type Customer = {
@@ -54,6 +55,12 @@ export default function Home() {
   const [lastTransaction, setLastTransaction] = useState<Transaction | null>(null);
   const [hold, setHold] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   const currency = useMemo(
@@ -61,19 +68,39 @@ export default function Home() {
     []
   );
 
-  async function loadInitial() {
-    const [customerRes, auditRes] = await Promise.all([
-      fetch(`${API}/api/customer`),
-      fetch(`${API}/api/audit`)
-    ]);
-    if (customerRes.ok) setCustomer(await customerRes.json());
-    if (auditRes.ok) setAudits(await auditRes.json());
-  }
+  useEffect(() => {
+    let active = true;
+    fetch(`${API}/api/auth/session`, { credentials: "include" })
+      .then(response => response.json())
+      .then(data => {
+        if (active) setAuthenticated(data.authenticated === true);
+      })
+      .catch(() => {
+        if (active) setAuthError("Unable to connect to the ClarityPay API.");
+      })
+      .finally(() => {
+        if (active) setAuthChecked(true);
+      });
+
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
-    loadInitial();
+    if (!authenticated) return;
 
-    const source = new EventSource(`${API}/api/events`);
+    let active = true;
+    Promise.all([
+      fetch(`${API}/api/customer`, { credentials: "include" }),
+      fetch(`${API}/api/audit`, { credentials: "include" })
+    ]).then(async ([customerRes, auditRes]) => {
+      if (!active) return;
+      if (customerRes.ok) setCustomer(await customerRes.json());
+      if (auditRes.ok) setAudits(await auditRes.json());
+    }).catch(() => {
+      if (active) setAuthError("Unable to load dashboard data.");
+    });
+
+    const source = new EventSource(`${API}/api/events`, { withCredentials: true });
     source.onmessage = event => {
       const data = JSON.parse(event.data);
 
@@ -94,8 +121,11 @@ export default function Home() {
       }
     };
 
-    return () => source.close();
-  }, []);
+    return () => {
+      active = false;
+      source.close();
+    };
+  }, [authenticated]);
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({
@@ -104,18 +134,57 @@ export default function Home() {
     });
   }, [transcript]);
 
+  async function signIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const response = await fetch(`${API}/api/auth/login`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setAuthError(data.error || "Sign-in failed.");
+        return;
+      }
+      setPassword("");
+      setAuthenticated(true);
+    } catch {
+      setAuthError("Unable to connect to the ClarityPay API.");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function signOut() {
+    await fetch(`${API}/api/auth/logout`, {
+      method: "POST",
+      credentials: "include"
+    }).catch(() => undefined);
+    setAuthenticated(false);
+    setHold(false);
+    setModal(false);
+  }
+
   async function startSimulation() {
     setTranscript("");
     setRisk({ riskScore: 0, riskLevel: "LOW", signals: [] });
     setModal(false);
     setHold(false);
-    await fetch(`${API}/api/simulate-transcript`, { method: "POST" });
+    await fetch(`${API}/api/simulate-transcript`, {
+      method: "POST",
+      credentials: "include"
+    });
   }
 
   async function confirmTransfer() {
     setLoading(true);
     const res = await fetch(`${API}/api/transactions`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         amount: Number(amount),
@@ -146,7 +215,8 @@ export default function Home() {
     if (!lastTransaction) return;
 
     const res = await fetch(`${API}/api/transactions/${lastTransaction.id}/hold`, {
-      method: "POST"
+      method: "POST",
+      credentials: "include"
     });
     const data = await res.json();
 
@@ -159,6 +229,50 @@ export default function Home() {
 
   const riskClass = risk.riskLevel.toLowerCase();
 
+  if (!authChecked) {
+    return <main className="cp-shell auth-shell"><div className="auth-panel">Checking session…</div></main>;
+  }
+
+  if (!authenticated) {
+    return (
+      <main className="cp-shell auth-shell">
+        <form className="auth-panel" onSubmit={signIn}>
+          <div className="brand">
+            <div className="brand-mark">CP</div>
+            <div>
+              <div className="brand-title">ClarityPay</div>
+              <div className="brand-sub">Protected demo dashboard</div>
+            </div>
+          </div>
+          <h1>Sign in</h1>
+          <label className="auth-label" htmlFor="username">Username</label>
+          <input
+            className="auth-input"
+            id="username"
+            autoComplete="username"
+            value={username}
+            onChange={event => setUsername(event.target.value)}
+            required
+          />
+          <label className="auth-label" htmlFor="password">Password</label>
+          <input
+            className="auth-input"
+            id="password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={event => setPassword(event.target.value)}
+            required
+          />
+          {authError && <div className="auth-error" role="alert">{authError}</div>}
+          <button className="confirm" type="submit" disabled={authLoading}>
+            {authLoading ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+      </main>
+    );
+  }
+
   return (
     <main className="cp-shell">
       <header className="cp-topbar">
@@ -169,9 +283,12 @@ export default function Home() {
             <div className="brand-sub">Human-context financial safety layer</div>
           </div>
         </div>
-        <button className="demo-btn" onClick={startSimulation}>
-          ▶ Start Scam Simulation
-        </button>
+        <div className="top-actions">
+          <button className="logout-btn" onClick={signOut}>Sign out</button>
+          <button className="demo-btn" onClick={startSimulation}>
+            ▶ Start Scam Simulation
+          </button>
+        </div>
       </header>
 
       <div className="grid">
