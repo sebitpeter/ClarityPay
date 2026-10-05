@@ -8,47 +8,96 @@ datasource db {
 }
 
 model Customer {
-  id               String        @id @default(cuid())
-  name             String
-  age              Int
-  balance          Float
-  typicalTransfer  Float
-  trustedContact   String
-  trustedPhone     String
-  createdAt        DateTime      @default(now())
-  transactions     Transaction[]
-  alerts           Alert[]
+  id                   String        @id @default(cuid())
+  name                 String
+  phone                String
+  age                  Int
+  balance              Float
+  typicalTransferMin   Float
+  typicalTransferMax   Float
+  riskProfile          String        @default("STANDARD")
+  createdAt            DateTime      @default(now())
+  transactions         Transaction[]
+  beneficiaries        Beneficiary[]
+  trustedContacts      TrustedContact[]
+  alerts               Alert[]
+}
+
+model Beneficiary {
+  id             String        @id @default(cuid())
+  customerId     String
+  name           String
+  accountOrPhone String
+  channel        String        // BANK | MOBILE_MONEY
+  firstUsedAt    DateTime      @default(now())
+  trusted        Boolean       @default(false)
+  customer       Customer      @relation(fields: [customerId], references: [id])
+  transactions   Transaction[]
+}
+
+model TrustedContact {
+  id           String   @id @default(cuid())
+  customerId   String
+  name         String
+  relationship String
+  phone        String
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  customer     Customer @relation(fields: [customerId], references: [id])
 }
 
 model Transaction {
-  id             String   @id @default(cuid())
-  customerId     String
-  amount         Float
-  recipient      String
-  recipientRef   String
-  isNewRecipient Boolean  @default(true)
-  riskScore      Int      @default(0)
-  riskLevel      String   @default("LOW")
-  status         String   @default("PENDING")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  customer       Customer @relation(fields: [customerId], references: [id])
+  id            String        @id @default(cuid())
+  customerId    String
+  beneficiaryId String?
+  amount        Float
+  currency      String        @default("UGX")
+  channel       String        // BANK | MOBILE_MONEY
+  recipientName String
+  recipientRef  String
+  paymentReason String        @default("OTHER")
+  deviceId      String        @default("unknown")
+  riskScore     Int           @default(0)
+  riskLevel     String        @default("LOW")
+  status        String        @default("PENDING")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  customer      Customer      @relation(fields: [customerId], references: [id])
+  beneficiary   Beneficiary?  @relation(fields: [beneficiaryId], references: [id])
+  riskSignals   RiskSignal[]
+  alerts        Alert[]
+  auditEvents   AuditEvent[]
+}
+
+model RiskSignal {
+  id            String      @id @default(cuid())
+  transactionId String
+  category      String      // TRANSACTION | COMMUNICATION | DEVICE | BEHAVIOUR
+  type          String
+  score         Int
+  reason        String
+  createdAt     DateTime    @default(now())
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
 }
 
 model Alert {
-  id         String   @id @default(cuid())
-  customerId String
-  channel    String
-  message    String
-  status     String   @default("SIMULATED")
-  createdAt  DateTime @default(now())
-  customer   Customer @relation(fields: [customerId], references: [id])
+  id            String      @id @default(cuid())
+  customerId    String
+  transactionId String?
+  type          String      // TRUSTED_CONTACT | BANK_NOTIFY
+  message       String
+  status        String      @default("SIMULATED")
+  createdAt     DateTime    @default(now())
+  customer      Customer    @relation(fields: [customerId], references: [id])
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
 }
 
 model AuditEvent {
-  id        String   @id @default(cuid())
-  type      String
-  message   String
-  metadata  String?
-  createdAt DateTime @default(now())
+  id            String      @id @default(cuid())
+  transactionId String?
+  eventType     String
+  description   String
+  metadata      String?
+  createdAt     DateTime    @default(now())
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
 }
